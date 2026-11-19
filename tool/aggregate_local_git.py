@@ -93,7 +93,7 @@ def main() -> int:
         repository for repository in json.loads(args.repos.read_text(encoding='utf-8'))
         if repository not in EXCLUDED_REPOSITORIES
     ]
-    totals = defaultdict(lambda: {'name': '', 'repositories': set(), 'commits': 0, 'add': 0, 'delete': 0, 'cancel': 0})
+    totals = defaultdict(lambda: {'name': '', 'repositories': set(), 'commits': 0, 'add': 0, 'delete': 0, 'cancel': 0, 'canceled_added': 0, 'canceled_deleted': 0})
     repo_summary = []
     unknowns = []
 
@@ -107,6 +107,8 @@ def main() -> int:
         live = defaultdict(list)
         current = None
         add_count = delete_count = cancel_count = commit_count = 0
+        path = ''
+        active = False
         for raw in process.stdout:
             line = raw.rstrip('\n')
             marker = MARKER.match(line)
@@ -124,6 +126,21 @@ def main() -> int:
                 fields = line.split()
                 path = fields[3][2:] if len(fields) >= 4 and fields[3].startswith('b/') else ''
                 active = source_path(path)
+                rename_from = None
+                continue
+            if line.startswith('rename from '):
+                rename_from = line[len('rename from '):]
+                continue
+            if line.startswith('rename to '):
+                rename_to = line[len('rename to '):]
+                if rename_from and source_path(rename_to):
+                    moved = defaultdict(list)
+                    for (old_path, text), authors in list(live.items()):
+                        if old_path == rename_from:
+                            moved[(rename_to, text)].extend(authors)
+                            del live[(old_path, text)]
+                    for key, authors in moved.items():
+                        live[key].extend(authors)
                 continue
             if current is None or not line.startswith(('+++', '---', '+', '-')):
                 continue
@@ -142,7 +159,9 @@ def main() -> int:
                     previous = live[key].pop()
                     totals[previous]['add'] -= 1
                     totals[previous]['cancel'] += 1
+                    totals[previous]['canceled_added'] += 1
                     totals[current[0]]['cancel'] += 1
+                    totals[current[0]]['canceled_deleted'] += 1
                     cancel_count += 1
                 else:
                     totals[current[0]]['delete'] += 1
@@ -159,7 +178,7 @@ def main() -> int:
             raise RuntimeError(f'git log returned no commits for {repository}')
         repo_summary.append({'repository': repository, 'commits': commit_count, 'add': add_count, 'delete': delete_count, 'cancel': cancel_count})
 
-    merged = defaultdict(lambda: {'name': '', 'repositories': set(), 'commits': 0, 'add': 0, 'delete': 0, 'cancel': 0, 'raw_ids': set()})
+    merged = defaultdict(lambda: {'name': '', 'repositories': set(), 'commits': 0, 'add': 0, 'delete': 0, 'cancel': 0, 'canceled_added': 0, 'canceled_deleted': 0, 'raw_ids': set()})
     for key, row in totals.items():
         canonical = canonical_identity(key)
         target = merged[canonical]
@@ -170,6 +189,8 @@ def main() -> int:
         target['add'] += row['add']
         target['delete'] += row['delete']
         target['cancel'] += row['cancel']
+        target['canceled_added'] += row['canceled_added']
+        target['canceled_deleted'] += row['canceled_deleted']
         target.setdefault('first_commit', row.get('first_commit'))
         if row.get('first_commit') and (not target.get('first_commit') or timestamp_key(row['first_commit']) < timestamp_key(target['first_commit'])):
             target['first_commit'] = row['first_commit']
@@ -180,7 +201,7 @@ def main() -> int:
     identity_aliases = []
     for key, row in merged.items():
         net = row['add'] - row['delete']
-        result.append({'id': key, 'name': row['name'], 'type': 'bot' if is_bot(row['name'], key) else 'human', 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'first_commit': row.get('first_commit'), 'last_commit': row.get('last_commit'), 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel']})
+        result.append({'id': key, 'name': row['name'], 'type': 'bot' if is_bot(row['name'], key) else 'human', 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'first_commit': row.get('first_commit'), 'last_commit': row.get('last_commit'), 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel'], 'canceled_added_lines': row['canceled_added'], 'canceled_deleted_lines': row['canceled_deleted']})
         if len(row['raw_ids']) > 1:
             members = [
                 {
@@ -208,7 +229,7 @@ def main() -> int:
     payload = {'metric': 'local source-line diff cancellation; rank abs(added - deleted)', 'repositories': repositories, 'repo_summary': repo_summary, 'unknowns': unknowns, 'identity_aliases': identity_aliases, 'contributors': result, 'human_contributors': [row for row in result if row['type'] == 'human'], 'bot_contributors': [row for row in result if row['type'] == 'bot']}
     args.output.with_suffix('.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
     with args.output.with_suffix('.csv').open('w', newline='', encoding='utf-8-sig') as handle:
-        fields = ['type', 'id', 'name', 'added_ksloc', 'deleted_ksloc', 'net_ksloc', 'rank_score_ksloc', 'commits', 'matched_cancellations', 'repositories']
+        fields = ['type', 'id', 'name', 'added_ksloc', 'deleted_ksloc', 'net_ksloc', 'rank_score_ksloc', 'commits', 'matched_cancellations', 'canceled_added_lines', 'canceled_deleted_lines', 'repositories']
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for row in result:
