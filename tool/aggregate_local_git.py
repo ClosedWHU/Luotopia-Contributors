@@ -23,7 +23,32 @@ EXCLUDED_REPOSITORIES = {
     'Luotopia-Skills', 'homebrew-luotopia',
 }
 BOT_MARKERS = ('bot', 'dependabot', 'renovate', 'claude', 'codex', 'fossabot', 'cloudflare', 'runner@', 'github-actions')
-MARKER = re.compile(r'^@@@([0-9a-f]+)\x00([^\x00]*)\x00([^\x00]*)$')
+MARKER = re.compile(r'^@@@([0-9a-f]+)\x00([^\x00]*)\x00([^\x00]*)\x00([^\x00]*)$')
+
+# These are author identities observed in the repository histories. The merge is deliberately
+# explicit: similar names alone are not enough to prove that two people are the same person.
+IDENTITY_ALIASES = {
+    'github-actions[bot]@users.noreply.github.com': 'github-actions[bot]',
+    'hsukqilee@users.noreply.github.com': 'team@tsinbei.com',
+    'a@0x535a.cn': 'i@0x535a.cn',
+    'enchograph': 'ender0213@outlook.com',
+    'gugumur': '2221533105@qq.com',
+    'johnson-tang2019': 'johnson-tang2019@outlook.com',
+    'johnson@johnsons-mac-pro.local': 'johnson-tang2019@outlook.com',
+    'littleweak_duck@littledemacbook-pro.local': 'yinjiab@gmail.com',
+    'supertjz123@foxmail.com': 'fqwqf@fqwqf.xyz',
+}
+
+CANONICAL_NAMES = {
+    'github-actions[bot]': 'github-actions[bot]',
+    'team@tsinbei.com': 'Hsukqi Lee',
+    'i@0x535a.cn': '0x535A',
+    'ender0213@outlook.com': 'Enchograph',
+    '2221533105@qq.com': 'GuGuMur',
+    'johnson-tang2019@outlook.com': 'Johnson-Tang2019',
+    'yinjiab@gmail.com': 'Little_WeakDuck',
+    'fqwqf@fqwqf.xyz': 'fQwQf',
+}
 
 
 def source_path(path: str) -> bool:
@@ -45,6 +70,10 @@ def is_bot(name: str, email: str) -> bool:
     return any(marker in f'{name} {email}'.lower() for marker in BOT_MARKERS)
 
 
+def canonical_identity(identity: str) -> str:
+    return IDENTITY_ALIASES.get(identity, identity)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--sources', type=Path, required=True)
@@ -64,7 +93,7 @@ def main() -> int:
         if not (root / '.git').exists():
             unknowns.append({'repository': repository, 'reason': 'checkout_missing'})
             continue
-        command = ['git', 'log', '--reverse', '--format=@@@%H%x00%an%x00%ae', '--patch', '--find-renames', '--find-copies']
+        command = ['git', 'log', '--reverse', '--format=@@@%H%x00%an%x00%ae%x00%aI', '--patch', '--find-renames', '--find-copies']
         process = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
         live = defaultdict(list)
         current = None
@@ -76,6 +105,8 @@ def main() -> int:
                 current = author_key(marker.group(2), marker.group(3))
                 current_is_bot = is_bot(marker.group(2), marker.group(3))
                 totals[current[0]]['name'] = current[1]
+                totals[current[0]].setdefault('first_commit', marker.group(4))
+                totals[current[0]]['last_commit'] = marker.group(4)
                 totals[current[0]]['repositories'].add(repository)
                 totals[current[0]]['commits'] += 1
                 commit_count += 1
@@ -119,12 +150,48 @@ def main() -> int:
             raise RuntimeError(f'git log returned no commits for {repository}')
         repo_summary.append({'repository': repository, 'commits': commit_count, 'add': add_count, 'delete': delete_count, 'cancel': cancel_count})
 
-    result = []
+    merged = defaultdict(lambda: {'name': '', 'repositories': set(), 'commits': 0, 'add': 0, 'delete': 0, 'cancel': 0, 'raw_ids': set()})
     for key, row in totals.items():
+        canonical = canonical_identity(key)
+        target = merged[canonical]
+        target['raw_ids'].add(key)
+        target['name'] = CANONICAL_NAMES.get(canonical, target['name'] or row['name'])
+        target['repositories'].update(row['repositories'])
+        target['commits'] += row['commits']
+        target['add'] += row['add']
+        target['delete'] += row['delete']
+        target['cancel'] += row['cancel']
+        target.setdefault('first_commit', row.get('first_commit'))
+        if row.get('first_commit') and (not target.get('first_commit') or row['first_commit'] < target['first_commit']):
+            target['first_commit'] = row['first_commit']
+        if row.get('last_commit') and (not target.get('last_commit') or row['last_commit'] > target['last_commit']):
+            target['last_commit'] = row['last_commit']
+
+    result = []
+    identity_aliases = []
+    for key, row in merged.items():
         net = row['add'] - row['delete']
-        result.append({'id': key, 'name': row['name'], 'type': 'bot' if is_bot(row['name'], key) else 'human', 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel']})
+        result.append({'id': key, 'name': row['name'], 'type': 'bot' if is_bot(row['name'], key) else 'human', 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'first_commit': row.get('first_commit'), 'last_commit': row.get('last_commit'), 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel']})
+        if len(row['raw_ids']) > 1:
+            identity_aliases.append({
+                'canonical_id': key,
+                'canonical_name': row['name'],
+                'members': [
+                    {
+                        'id': member,
+                        'name': totals[member]['name'],
+                        'commits': totals[member]['commits'],
+                        'repositories': sorted(totals[member]['repositories']),
+                        'first_commit': totals[member].get('first_commit'),
+                        'last_commit': totals[member].get('last_commit'),
+                    }
+                    for member in sorted(row['raw_ids'])
+                ],
+                'reason': 'same author identity by explicit name/email alias evidence; canonical record has the larger observed history',
+            })
     result.sort(key=lambda row: (row['type'], -abs(row['net_ksloc']), -(row['added_ksloc'] + row['deleted_ksloc']), row['name']))
-    payload = {'metric': 'local source-line diff cancellation; rank abs(added - deleted)', 'repositories': repositories, 'repo_summary': repo_summary, 'unknowns': unknowns, 'contributors': result, 'human_contributors': [row for row in result if row['type'] == 'human'], 'bot_contributors': [row for row in result if row['type'] == 'bot']}
+    identity_aliases.sort(key=lambda row: row['canonical_name'].lower())
+    payload = {'metric': 'local source-line diff cancellation; rank abs(added - deleted)', 'repositories': repositories, 'repo_summary': repo_summary, 'unknowns': unknowns, 'identity_aliases': identity_aliases, 'contributors': result, 'human_contributors': [row for row in result if row['type'] == 'human'], 'bot_contributors': [row for row in result if row['type'] == 'bot']}
     args.output.with_suffix('.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
     with args.output.with_suffix('.csv').open('w', newline='', encoding='utf-8-sig') as handle:
         fields = ['type', 'id', 'name', 'added_ksloc', 'deleted_ksloc', 'net_ksloc', 'rank_score_ksloc', 'commits', 'matched_cancellations', 'repositories']
