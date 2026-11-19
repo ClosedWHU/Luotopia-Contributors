@@ -18,6 +18,11 @@ SOURCE_EXTENSIONS = {
 }
 EXCLUDED_PARTS = {'.dart_tool', '.git', 'build', 'coverage', 'generated', 'node_modules', 'vendor', 'Pods', 'dist'}
 EXCLUDED_NAMES = {'pubspec.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'}
+EXCLUDED_REPOSITORIES = {
+    'Luotopia-Certificates', 'Luotopia-Dist', 'Luotopia-Docs',
+    'Luotopia-Skills', 'homebrew-luotopia',
+}
+BOT_MARKERS = ('bot', 'dependabot', 'renovate', 'claude', 'codex', 'fossabot', 'cloudflare', 'runner@', 'github-actions')
 MARKER = re.compile(r'^@@@([0-9a-f]+)\x00([^\x00]*)\x00([^\x00]*)$')
 
 
@@ -36,13 +41,20 @@ def author_key(name: str, email: str) -> tuple[str, str]:
     return email.lower().strip() or label.lower(), label
 
 
+def is_bot(name: str, email: str) -> bool:
+    return any(marker in f'{name} {email}'.lower() for marker in BOT_MARKERS)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('--sources', type=Path, required=True)
     parser.add_argument('--repos', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    repositories = json.loads(args.repos.read_text(encoding='utf-8'))
+    repositories = [
+        repository for repository in json.loads(args.repos.read_text(encoding='utf-8'))
+        if repository not in EXCLUDED_REPOSITORIES
+    ]
     totals = defaultdict(lambda: {'name': '', 'repositories': set(), 'commits': 0, 'add': 0, 'delete': 0, 'cancel': 0})
     repo_summary = []
     unknowns = []
@@ -62,6 +74,7 @@ def main() -> int:
             marker = MARKER.match(line)
             if marker:
                 current = author_key(marker.group(2), marker.group(3))
+                current_is_bot = is_bot(marker.group(2), marker.group(3))
                 totals[current[0]]['name'] = current[1]
                 totals[current[0]]['repositories'].add(repository)
                 totals[current[0]]['commits'] += 1
@@ -104,19 +117,19 @@ def main() -> int:
     result = []
     for key, row in totals.items():
         net = row['add'] - row['delete']
-        result.append({'id': key, 'name': row['name'], 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel']})
-    result.sort(key=lambda row: (-abs(row['net_ksloc']), -(row['added_ksloc'] + row['deleted_ksloc']), row['name']))
-    payload = {'metric': 'local source-line diff cancellation; rank abs(added - deleted)', 'repositories': repositories, 'repo_summary': repo_summary, 'unknowns': unknowns, 'contributors': result}
+        result.append({'id': key, 'name': row['name'], 'type': 'bot' if is_bot(row['name'], key) else 'human', 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel']})
+    result.sort(key=lambda row: (row['type'], -abs(row['net_ksloc']), -(row['added_ksloc'] + row['deleted_ksloc']), row['name']))
+    payload = {'metric': 'local source-line diff cancellation; rank abs(added - deleted)', 'repositories': repositories, 'repo_summary': repo_summary, 'unknowns': unknowns, 'contributors': result, 'human_contributors': [row for row in result if row['type'] == 'human'], 'bot_contributors': [row for row in result if row['type'] == 'bot']}
     args.output.with_suffix('.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
     with args.output.with_suffix('.csv').open('w', newline='', encoding='utf-8-sig') as handle:
-        fields = ['id', 'name', 'added_ksloc', 'deleted_ksloc', 'net_ksloc', 'rank_score_ksloc', 'commits', 'matched_cancellations', 'repositories']
+        fields = ['type', 'id', 'name', 'added_ksloc', 'deleted_ksloc', 'net_ksloc', 'rank_score_ksloc', 'commits', 'matched_cancellations', 'repositories']
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for row in result:
             writer.writerow({field: ','.join(row['repositories']) if field == 'repositories' else row[field] for field in fields})
     print(json.dumps({'contributors': len(result), 'unknowns': len(unknowns), 'json': str(args.output.with_suffix('.json')), 'csv': str(args.output.with_suffix('.csv'))}, ensure_ascii=False))
     for index, row in enumerate(result, 1):
-        print(f"{index}. {row['name']} +{row['added_ksloc']}k -{row['deleted_ksloc']}k net={row['net_ksloc']}k cancel={row['matched_cancellations']}")
+        print(f"{index}. [{row['type']}] {row['name']} +{row['added_ksloc']}k -{row['deleted_ksloc']}k net={row['net_ksloc']}k cancel={row['matched_cancellations']}")
     return 0
 
 
