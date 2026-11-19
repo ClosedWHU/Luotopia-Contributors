@@ -8,9 +8,9 @@ import csv
 import json
 from pathlib import Path
 import re
-import subprocess
 from collections import defaultdict
 from datetime import datetime
+from git_lineage import scan
 
 SOURCE_EXTENSIONS = {
     '.c', '.cc', '.cpp', '.cs', '.dart', '.go', '.h', '.hpp', '.java', '.js',
@@ -24,7 +24,6 @@ EXCLUDED_REPOSITORIES = {
     'Luotopia-Skills', 'homebrew-luotopia',
 }
 BOT_MARKERS = ('bot', 'dependabot', 'renovate', 'claude', 'codex', 'fossabot', 'cloudflare', 'runner@', 'github-actions')
-MARKER = re.compile(r'^@@@([0-9a-f]+)\x00([^\x00]*)\x00([^\x00]*)\x00([^\x00]*)$')
 
 # These are author identities observed in the repository histories. The merge is deliberately
 # explicit: similar names alone are not enough to prove that two people are the same person.
@@ -106,81 +105,32 @@ def main() -> int:
         if not (root / '.git').exists():
             unknowns.append({'repository': repository, 'reason': 'checkout_missing'})
             continue
-        command = ['git', 'log', '--reverse', '--format=@@@%H%x00%an%x00%ae%x00%aI', '--patch', '--find-renames', '--find-copies']
-        process = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace')
-        live = defaultdict(list)
-        current = None
-        add_count = delete_count = cancel_count = commit_count = 0
-        path = ''
-        active = False
-        for raw in process.stdout:
-            line = raw.rstrip('\n')
-            marker = MARKER.match(line)
-            if marker:
-                current = author_key(marker.group(2), marker.group(3))
-                current_is_bot = is_bot(marker.group(2), marker.group(3))
-                totals[current[0]]['name'] = current[1]
-                totals[current[0]].setdefault('first_commit', marker.group(4))
-                totals[current[0]]['last_commit'] = marker.group(4)
-                totals[current[0]]['repositories'].add(repository)
-                totals[current[0]]['commits'] += 1
-                commit_count += 1
-                continue
-            if line.startswith('diff --git '):
-                fields = line.split()
-                path = fields[3][2:] if len(fields) >= 4 and fields[3].startswith('b/') else ''
-                active = source_path(path)
-                rename_from = None
-                continue
-            if line.startswith('rename from '):
-                rename_from = line[len('rename from '):]
-                continue
-            if line.startswith('rename to '):
-                rename_to = line[len('rename to '):]
-                if rename_from and source_path(rename_to):
-                    moved = defaultdict(list)
-                    for (old_path, text), authors in list(live.items()):
-                        if old_path == rename_from:
-                            moved[(rename_to, text)].extend(authors)
-                            del live[(old_path, text)]
-                    for key, authors in moved.items():
-                        live[key].extend(authors)
-                continue
-            if current is None or not line.startswith(('+++', '---', '+', '-')):
-                continue
-            if line.startswith('+++ b/'):
-                path = line[6:]
-                active = source_path(path)
-                continue
-            if line.startswith('--- a/') or line.startswith('+++ /dev/null') or line.startswith('--- /dev/null'):
-                continue
-            if 'active' not in locals() or not active or line.startswith(('+++', '---')):
-                continue
-            text = line[1:]
-            key = (path, text)
-            if line.startswith('-'):
-                if live[key]:
-                    previous = live[key].pop()
-                    totals[previous]['add'] -= 1
-                    totals[previous]['cancel'] += 1
-                    totals[previous]['canceled_added'] += 1
-                    totals[current[0]]['cancel'] += 1
-                    totals[current[0]]['canceled_deleted'] += 1
-                    cancel_count += 1
-                else:
-                    totals[current[0]]['delete'] += 1
-                    delete_count += 1
-            elif line.startswith('+'):
-                live[key].append(current[0])
-                totals[current[0]]['add'] += 1
-                add_count += 1
-        process.wait()
-        if process.returncode != 0:
-            error = process.stderr.read().strip()
-            raise RuntimeError(f'git log failed for {repository}: {error or "unknown git error"}')
-        if commit_count == 0:
-            raise RuntimeError(f'git log returned no commits for {repository}')
-        repo_summary.append({'repository': repository, 'commits': commit_count, 'add': add_count, 'delete': delete_count, 'cancel': cancel_count})
+        def observe_author(author, name, timestamp, commit):
+            row = totals[author]
+            row['name'] = name
+            row['repositories'].add(repository)
+            row['commits'] += 1
+            if not row.get('first_commit') or timestamp_key(timestamp) < timestamp_key(row['first_commit']):
+                row['first_commit'] = timestamp
+            if not row.get('last_commit') or timestamp_key(timestamp) > timestamp_key(row['last_commit']):
+                row['last_commit'] = timestamp
+
+        ledger = scan(root, source_path, author_key, observe_author)
+        for author, count in ledger['retained_by_author'].items():
+            totals[author]['add'] += count
+        for author, count in ledger['canceled_added_by_author'].items():
+            totals[author]['canceled_added'] += count
+            totals[author]['cancel'] += count
+        for author, count in ledger['canceled_deleted_by_author'].items():
+            totals[author]['canceled_deleted'] += count
+            totals[author]['cancel'] += count
+        repo_summary.append({
+            'repository': repository, 'head': ledger['head'], 'commits': ledger['commits'],
+            'source_files': ledger['files'], 'introduced_lines': ledger['introduced'],
+            'add': ledger['retained'], 'delete': 0, 'cancel': ledger['cancel'],
+            'excluded_binary_paths': ledger['excluded_binary_paths'],
+            'conservation_verified': True,
+        })
 
     merged = defaultdict(lambda: {'name': '', 'repositories': set(), 'commits': 0, 'add': 0, 'delete': 0, 'cancel': 0, 'canceled_added': 0, 'canceled_deleted': 0, 'raw_ids': set()})
     for key, row in totals.items():
@@ -228,9 +178,11 @@ def main() -> int:
                 'members': members,
                 'reason': CANONICAL_REASONS.get(key, 'same author identity by explicit name/email alias evidence; canonical record has the larger observed history'),
             })
-    result.sort(key=lambda row: (row['type'], -abs(row['net_ksloc']), -(row['added_ksloc'] + row['deleted_ksloc']), row['name']))
+    result.sort(key=lambda row: (row['type'], -row['added_lines'], -row['commits'], row['name']))
     identity_aliases.sort(key=lambda row: row['canonical_name'].lower())
-    payload = {'metric': 'local source-line diff cancellation; rank abs(added - deleted)', 'repositories': repositories, 'repo_summary': repo_summary, 'unknowns': unknowns, 'identity_aliases': identity_aliases, 'contributors': result, 'human_contributors': [row for row in result if row['type'] == 'human'], 'bot_contributors': [row for row in result if row['type'] == 'bot']}
+    if unknowns:
+        raise RuntimeError(f'Incomplete source checkouts: {unknowns}')
+    payload = {'metric_version': 2, 'metric': 'Git commit-DAG line provenance; rank source lines retained at HEAD', 'method': {'merge_provenance': 'first-parent matching lines, then other parents; only new lines belong to merger', 'merge_deletions': 'inherit parent removal; first parent wins independent-remover ties', 'copies': 'new line occurrences belong to the introducing commit', 'scope': 'eligible text source paths; exact Git histogram diff alignment with rename detection', 'deleted_lines': 'zero: every final removal has an observed origin; no unmatched-deletion score', 'limitations': ['Git-unrecognized moves and copies count as new occurrences', 'Repeated identical lines follow Git diff alignment; semantic equivalence is not inferred', 'Canceled lines are absent at HEAD, not necessarily invalid code']}, 'repositories': repositories, 'repo_summary': repo_summary, 'unknowns': unknowns, 'identity_aliases': identity_aliases, 'contributors': result, 'human_contributors': [row for row in result if row['type'] == 'human'], 'bot_contributors': [row for row in result if row['type'] == 'bot']}
     args.output.with_suffix('.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
     with args.output.with_suffix('.csv').open('w', newline='', encoding='utf-8-sig') as handle:
         fields = ['type', 'id', 'name', 'added_ksloc', 'deleted_ksloc', 'net_ksloc', 'rank_score_ksloc', 'commits', 'matched_cancellations', 'canceled_added_lines', 'canceled_deleted_lines', 'repositories']
