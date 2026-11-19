@@ -112,6 +112,11 @@ def main() -> int:
                 totals[current[0]]['add'] += 1
                 add_count += 1
         process.wait()
+        if process.returncode != 0:
+            error = process.stderr.read().strip()
+            raise RuntimeError(f'git log failed for {repository}: {error or "unknown git error"}')
+        if commit_count == 0:
+            raise RuntimeError(f'git log returned no commits for {repository}')
         repo_summary.append({'repository': repository, 'commits': commit_count, 'add': add_count, 'delete': delete_count, 'cancel': cancel_count})
 
     result = []

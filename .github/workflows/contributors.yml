@@ -18,7 +18,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sources
-          key: contributor-sources-v3
+          key: contributor-sources-v4
 
       - name: Install jq
         run: command -v jq
@@ -38,15 +38,18 @@ jobs:
           while IFS= read -r repository; do
             if [ -d "sources/${repository}/.git" ]; then
               git -C "sources/${repository}" remote set-url origin "https://x-access-token:${token}@github.com/ClosedWHU/${repository}.git"
-              git -C "sources/${repository}" fetch --quiet --prune origin main
+              git -C "sources/${repository}" fetch --quiet --prune origin "+refs/heads/main:refs/remotes/origin/main"
             else
-              git -c advice.detachedHead=false clone --quiet --no-tags --filter=blob:none --no-checkout \
+              git -c advice.detachedHead=false clone --quiet --no-tags --no-checkout \
                 "https://x-access-token:${token}@github.com/ClosedWHU/${repository}.git" "sources/${repository}"
             fi
-            git -C "sources/${repository}" sparse-checkout init --no-cone
-            git -C "sources/${repository}" sparse-checkout set --stdin < <(printf '%s\n' \
-              '*.c' '*.cc' '*.cpp' '*.cs' '*.dart' '*.go' '*.h' '*.hpp' '*.java' '*.js' '*.jsx' '*.kt' '*.kts' '*.m' '*.mm' '*.php' '*.py' '*.rb' '*.rs' '*.sh' '*.swift' '*.ts' '*.tsx' '*.vue' '*.xml' '*.yaml' '*.yml')
             git -C "sources/${repository}" checkout --quiet --detach origin/main
+            commit_count=$(git -C "sources/${repository}" rev-list --count HEAD)
+            if [ "$commit_count" -le 0 ]; then
+              echo "Repository ${repository} has no reachable commits after checkout." >&2
+              exit 1
+            fi
+            echo "${repository}: ${commit_count} commits"
             # Remove the temporary credential before the sources directory is
             # saved into the Actions cache.
             git -C "sources/${repository}" remote set-url origin "https://github.com/ClosedWHU/${repository}.git"
