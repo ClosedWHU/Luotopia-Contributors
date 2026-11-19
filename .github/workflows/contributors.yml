@@ -18,7 +18,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sources
-          key: contributor-sources-v2
+          key: contributor-sources-v3
 
       - name: Install jq
         run: command -v jq
