@@ -38,6 +38,7 @@ IDENTITY_ALIASES = {
     'johnson@johnsons-mac-pro.local': 'johnson-tang2019@outlook.com',
     'littleweak_duck@littledemacbook-pro.local': 'yinjiab@gmail.com',
     'supertjz123@foxmail.com': 'fqwqf@fqwqf.xyz',
+    '2024302072042@whu.edu.cn': 'yangqk12@whu.edu.cn',
 }
 
 CANONICAL_NAMES = {
@@ -49,10 +50,13 @@ CANONICAL_NAMES = {
     'johnson-tang2019@outlook.com': 'Johnson-Tang2019',
     'yinjiab@gmail.com': 'Little_WeakDuck',
     'fqwqf@fqwqf.xyz': 'fQwQf',
+    'misa.subanxia@icloud.com': 'misakayuuki',
+    'yangqk12@whu.edu.cn': 'laplaceyoung',
 }
 
 CANONICAL_REASONS = {
     'i@0x535a.cn': 'user-confirmed replacement for the blocked stephen-zeng account; the separate stephenzeng account is not merged',
+    'yangqk12@whu.edu.cn': 'user-confirmed CauchYoung and laplace young are the same contributor, using LaplaceYoung',
 }
 
 
