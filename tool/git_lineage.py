@@ -204,6 +204,22 @@ def scan(root, source_path, author_key, observe_author):
                     del snapshots[parent]
 
         final = snapshots[head]
+        # Independently enumerate HEAD's actual text blobs: conservation alone
+        # must not hide a parser that silently omitted an eligible final file.
+        expected = {}
+        for entry in git(root, 'ls-tree', '-r', '-z', head).split(b'\0'):
+            if not entry:
+                continue
+            metadata, path = entry.split(b'\t', 1)
+            mode, kind, blob = metadata.split()
+            if mode not in REGULAR_MODES or not source_path(path.decode('utf-8', 'surrogateescape')):
+                continue
+            content = lines(blob)
+            if content is not None:
+                expected[path] = (blob, len(content))
+        observed = {path: (file.blob, len(file.tokens)) for path, file in final.files.items()}
+        if observed != expected:
+            raise RuntimeError(f'{root}: reconstructed files differ from the actual HEAD tree')
         alive = [token for file in final.files.values() for token in file.tokens]
         if len(alive) != len(set(alive)):
             raise RuntimeError(f'{root}: a final line has duplicate provenance')

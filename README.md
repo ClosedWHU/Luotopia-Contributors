@@ -40,6 +40,8 @@ lines, that no final occurrence has duplicate provenance, and that retained
 and removed sets are disjoint. Report generation fails if these checks fail,
 history is shallow, or a selected checkout is missing. Canceled lines are not
 necessarily invalid code, and these counts do not measure code quality.
+The final file paths, blob IDs and per-file line counts are independently
+compared with `git ls-tree HEAD`, so a balanced but incomplete ledger also fails.
 
 All identities are counted during diff processing. The final report separates
 human and automation identities. Claude, Codex, Dependabot, GitHub Actions,

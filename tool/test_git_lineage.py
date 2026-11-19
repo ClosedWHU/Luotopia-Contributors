@@ -118,7 +118,7 @@ class LineageTests(unittest.TestCase):
         self.assertEqual(result['canceled_added_by_author'], {'bob@example.org': 1})
         self.assertEqual(result['canceled_deleted_by_author'], {'merger@example.org': 1})
 
-    def test_cli_exports_conserved_counts_and_canonical_identity(self):
+    def test_cli_exports_conserved_counts(self):
         (self.root / 'a.py').write_text('one\ntwo\n', encoding='utf-8')
         self.commit('alice')
         (self.root / 'a.py').write_text('one\n', encoding='utf-8')
