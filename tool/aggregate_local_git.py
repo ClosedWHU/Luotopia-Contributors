@@ -182,20 +182,25 @@ def main() -> int:
         net = row['add'] - row['delete']
         result.append({'id': key, 'name': row['name'], 'type': 'bot' if is_bot(row['name'], key) else 'human', 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'first_commit': row.get('first_commit'), 'last_commit': row.get('last_commit'), 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel']})
         if len(row['raw_ids']) > 1:
+            members = [
+                {
+                    'id': member,
+                    'name': totals[member]['name'],
+                    'commits': totals[member]['commits'],
+                    'repositories': sorted(totals[member]['repositories']),
+                    'first_commit': totals[member].get('first_commit'),
+                    'last_commit': totals[member].get('last_commit'),
+                }
+                for member in sorted(row['raw_ids'])
+            ]
+            largest_member = max(members, key=lambda member: (member['commits'], member['last_commit'] or ''))
+            latest_member = max(members, key=lambda member: timestamp_key(member['last_commit']))
             identity_aliases.append({
                 'canonical_id': key,
                 'canonical_name': row['name'],
-                'members': [
-                    {
-                        'id': member,
-                        'name': totals[member]['name'],
-                        'commits': totals[member]['commits'],
-                        'repositories': sorted(totals[member]['repositories']),
-                        'first_commit': totals[member].get('first_commit'),
-                        'last_commit': totals[member].get('last_commit'),
-                    }
-                    for member in sorted(row['raw_ids'])
-                ],
+                'largest_member': largest_member['id'],
+                'latest_member': latest_member['id'],
+                'members': members,
                 'reason': CANONICAL_REASONS.get(key, 'same author identity by explicit name/email alias evidence; canonical record has the larger observed history'),
             })
     result.sort(key=lambda row: (row['type'], -abs(row['net_ksloc']), -(row['added_ksloc'] + row['deleted_ksloc']), row['name']))
