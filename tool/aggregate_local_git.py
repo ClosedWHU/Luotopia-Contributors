@@ -52,7 +52,7 @@ CANONICAL_NAMES = {
 }
 
 CANONICAL_REASONS = {
-    'i@0x535a.cn': 'user-confirmed replacement for the blocked Stephen Zeng account; 0x535A is the current account',
+    'i@0x535a.cn': 'user-confirmed replacement for the blocked stephen-zeng account; the separate stephenzeng account is not merged',
 }
 
 
