@@ -208,6 +208,9 @@ def main() -> int:
         writer.writeheader()
         for row in result:
             writer.writerow({field: ','.join(row['repositories']) if field == 'repositories' else row[field] for field in fields})
+    with args.output.with_suffix('.ndjson').open('w', encoding='utf-8') as handle:
+        for row in result:
+            handle.write(json.dumps(row, ensure_ascii=False, separators=(',', ':')) + '\n')
     print(json.dumps({'contributors': len(result), 'unknowns': len(unknowns), 'json': str(args.output.with_suffix('.json')), 'csv': str(args.output.with_suffix('.csv'))}, ensure_ascii=False))
     for index, row in enumerate(result, 1):
         print(f"{index}. [{row['type']}] {row['name']} +{row['added_ksloc']}k -{row['deleted_ksloc']}k net={row['net_ksloc']}k cancel={row['matched_cancellations']}")
