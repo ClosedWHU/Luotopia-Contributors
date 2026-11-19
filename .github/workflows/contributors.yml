@@ -37,13 +37,13 @@ jobs:
           fi
           while IFS= read -r repository; do
             if [ -d "sources/${repository}/.git" ]; then
-              git -C "sources/${repository}" remote set-url origin "https://github.com/ClosedWHU/${repository}.git"
-              git -C "sources/${repository}" -c http.extraheader="AUTHORIZATION: bearer ${token}" fetch --quiet --prune origin main
+              git -C "sources/${repository}" remote set-url origin "https://x-access-token:${token}@github.com/ClosedWHU/${repository}.git"
+              git -C "sources/${repository}" fetch --quiet --prune origin main
             else
-              git -c http.extraheader="AUTHORIZATION: bearer ${token}" \
-                -c advice.detachedHead=false clone --quiet --no-tags --filter=blob:none --no-checkout \
-                "https://github.com/ClosedWHU/${repository}.git" "sources/${repository}"
+              git -c advice.detachedHead=false clone --quiet --no-tags --filter=blob:none --no-checkout \
+                "https://x-access-token:${token}@github.com/ClosedWHU/${repository}.git" "sources/${repository}"
             fi
+            git -C "sources/${repository}" remote set-url origin "https://github.com/ClosedWHU/${repository}.git"
             git -C "sources/${repository}" sparse-checkout init --no-cone
             git -C "sources/${repository}" sparse-checkout set --stdin < <(printf '%s\n' \
               '*.c' '*.cc' '*.cpp' '*.cs' '*.dart' '*.go' '*.h' '*.hpp' '*.java' '*.js' '*.jsx' '*.kt' '*.kts' '*.m' '*.mm' '*.php' '*.py' '*.rb' '*.rs' '*.sh' '*.swift' '*.ts' '*.tsx' '*.vue' '*.xml' '*.yaml' '*.yml')
