@@ -43,11 +43,13 @@ jobs:
               git -c advice.detachedHead=false clone --quiet --no-tags --filter=blob:none --no-checkout \
                 "https://x-access-token:${token}@github.com/ClosedWHU/${repository}.git" "sources/${repository}"
             fi
-            git -C "sources/${repository}" remote set-url origin "https://github.com/ClosedWHU/${repository}.git"
             git -C "sources/${repository}" sparse-checkout init --no-cone
             git -C "sources/${repository}" sparse-checkout set --stdin < <(printf '%s\n' \
               '*.c' '*.cc' '*.cpp' '*.cs' '*.dart' '*.go' '*.h' '*.hpp' '*.java' '*.js' '*.jsx' '*.kt' '*.kts' '*.m' '*.mm' '*.php' '*.py' '*.rb' '*.rs' '*.sh' '*.swift' '*.ts' '*.tsx' '*.vue' '*.xml' '*.yaml' '*.yml')
             git -C "sources/${repository}" checkout --quiet --detach origin/main
+            # Remove the temporary credential before the sources directory is
+            # saved into the Actions cache.
+            git -C "sources/${repository}" remote set-url origin "https://github.com/ClosedWHU/${repository}.git"
           done < <(jq -r '.[]' repos.json)
 
       - name: Aggregate local diffs
