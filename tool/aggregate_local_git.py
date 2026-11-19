@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 from collections import defaultdict
+from datetime import datetime
 
 SOURCE_EXTENSIONS = {
     '.c', '.cc', '.cpp', '.cs', '.dart', '.go', '.h', '.hpp', '.java', '.js',
@@ -50,6 +51,10 @@ CANONICAL_NAMES = {
     'fqwqf@fqwqf.xyz': 'fQwQf',
 }
 
+CANONICAL_REASONS = {
+    'i@0x535a.cn': 'user-confirmed replacement for the blocked Stephen Zeng account; 0x535A is the current account',
+}
+
 
 def source_path(path: str) -> bool:
     path = path.replace('\\', '/')
@@ -72,6 +77,10 @@ def is_bot(name: str, email: str) -> bool:
 
 def canonical_identity(identity: str) -> str:
     return IDENTITY_ALIASES.get(identity, identity)
+
+
+def timestamp_key(value: str | None) -> datetime:
+    return datetime.fromisoformat(value.replace('Z', '+00:00')) if value else datetime.min.replace(tzinfo=None)
 
 
 def main() -> int:
@@ -162,9 +171,9 @@ def main() -> int:
         target['delete'] += row['delete']
         target['cancel'] += row['cancel']
         target.setdefault('first_commit', row.get('first_commit'))
-        if row.get('first_commit') and (not target.get('first_commit') or row['first_commit'] < target['first_commit']):
+        if row.get('first_commit') and (not target.get('first_commit') or timestamp_key(row['first_commit']) < timestamp_key(target['first_commit'])):
             target['first_commit'] = row['first_commit']
-        if row.get('last_commit') and (not target.get('last_commit') or row['last_commit'] > target['last_commit']):
+        if row.get('last_commit') and (not target.get('last_commit') or timestamp_key(row['last_commit']) > timestamp_key(target['last_commit'])):
             target['last_commit'] = row['last_commit']
 
     result = []
@@ -187,7 +196,7 @@ def main() -> int:
                     }
                     for member in sorted(row['raw_ids'])
                 ],
-                'reason': 'same author identity by explicit name/email alias evidence; canonical record has the larger observed history',
+                'reason': CANONICAL_REASONS.get(key, 'same author identity by explicit name/email alias evidence; canonical record has the larger observed history'),
             })
     result.sort(key=lambda row: (row['type'], -abs(row['net_ksloc']), -(row['added_ksloc'] + row['deleted_ksloc']), row['name']))
     identity_aliases.sort(key=lambda row: row['canonical_name'].lower())
