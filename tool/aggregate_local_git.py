@@ -201,7 +201,7 @@ def main() -> int:
     identity_aliases = []
     for key, row in merged.items():
         net = row['add'] - row['delete']
-        result.append({'id': key, 'name': row['name'], 'type': 'bot' if is_bot(row['name'], key) else 'human', 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'first_commit': row.get('first_commit'), 'last_commit': row.get('last_commit'), 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel'], 'canceled_added_lines': row['canceled_added'], 'canceled_deleted_lines': row['canceled_deleted']})
+        result.append({'id': key, 'name': row['name'], 'type': 'bot' if is_bot(row['name'], key) else 'human', 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'first_commit': row.get('first_commit'), 'last_commit': row.get('last_commit'), 'added_lines': row['add'], 'deleted_lines': row['delete'], 'net_lines': net, 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel'], 'canceled_added_lines': row['canceled_added'], 'canceled_deleted_lines': row['canceled_deleted']})
         if len(row['raw_ids']) > 1:
             members = [
                 {
