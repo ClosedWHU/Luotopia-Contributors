@@ -17,10 +17,15 @@ jobs:
       - name: Checkout target repositories
         env:
           CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p sources
-          token="${CROSS_REPO_TOKEN:-${GITHUB_TOKEN}}"
+          token="${CROSS_REPO_TOKEN:-${GITHUB_TOKEN:-}}"
+          if [ -z "$token" ]; then
+            echo 'No checkout token is available. Configure the CROSS_REPO_TOKEN organization secret for private targets.' >&2
+            exit 1
+          fi
           while IFS= read -r repository; do
             git -c advice.detachedHead=false clone --quiet --no-tags --filter=blob:none --no-checkout \
               "https://x-access-token:${token}@github.com/ClosedWHU/${repository}.git" "sources/${repository}"
