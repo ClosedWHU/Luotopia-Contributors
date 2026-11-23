@@ -55,6 +55,30 @@ Private target repositories require the organization secret
 `CROSS_REPO_TOKEN` with read access. Public repositories can use the workflow
 token.
 
+## Update schedule and retention
+
+The report is generated daily at **06:17 China Standard Time (UTC+8)**
+(`17 22 * * *` UTC), with manual runs available through Actions. Scheduled jobs
+can start later when GitHub Actions is busy. Runs are serialized so publication
+and cleanup cannot race each other.
+
+Release titles contain the generation date and time down to seconds (UTC+8),
+human and automation contributor counts, retained source lines, historical
+introduced lines and reachable commits. These are totals across the selected
+repositories, allowing successive reports to be compared in the release list.
+Introduced lines are historical occurrences, not gross edits; introduced minus
+retained is the number of canceled occurrences. Added/deleted cancellation
+attributions must not be summed, as both describe the same removed lines.
+
+After all report assets have been successfully published, the workflow retains
+the newest **10 report releases** (and their tags) and **10 workflow runs** for
+`contributors.yml`, counting the current run. Older completed runs are deleted
+along with their logs/artifacts; active runs are never deleted, so the limit
+may be temporarily exceeded. Draft, prerelease and non-report releases, and
+other workflows' runs are not deleted. A failed publication does not prune
+history. Cleanup requires `contents: write` and `actions: write` on the workflow
+token. The retention count is defined once in `tool/publish_report.py`.
+
 Run locally:
 
 ```sh
@@ -65,5 +89,5 @@ Behavior checks create isolated Git histories (branches, merge inheritance,
 duplicate content, line deletion and renames) and run the production scanner:
 
 ```sh
-python3 -B -m unittest discover -s tool -p test_git_lineage.py -v
+python3 -B -m unittest discover -s tool -p 'test_*.py' -v
 ```
