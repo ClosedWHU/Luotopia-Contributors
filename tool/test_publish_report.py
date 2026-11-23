@@ -20,15 +20,17 @@ class PublishingTests(unittest.TestCase):
         report = {
             'human_contributors': [{}, {}], 'bot_contributors': [{}],
             'repo_summary': [
-                {'add': 1200, 'introduced_lines': 1500, 'commits': 10},
-                {'add': 300, 'introduced_lines': 400, 'commits': 2},
+                {'add': 1200, 'introduced_lines': 1500, 'commits': 10,
+                 'cumulative_added_lines': 1300, 'cumulative_modified_lines': 200, 'cumulative_removed_lines': 100},
+                {'add': 300, 'introduced_lines': 400, 'commits': 2,
+                 'cumulative_added_lines': 350, 'cumulative_modified_lines': 50, 'cumulative_removed_lines': 20},
             ],
         }
         tag, title, notes = release_metadata(
             report, datetime(2026, 11, 22, 22, 17, 30, tzinfo=timezone.utc), '123')
         self.assertEqual(tag, 'report-20261123-061730-123')
         self.assertEqual(title, '2026-11-23 06:17:30 UTC+8 | 2 humans + 1 bots | '
-                         '1,500 retained | 1,900 introduced | 12 commits')
+                         '+1,650 ~250 -120 SLOC | 1,500 retained')
         self.assertIn('| Introduced lines no longer retained | 400 |', notes)
         self.assertIn('| Contributors (human + automation) | 3 |', notes)
 

@@ -8,7 +8,8 @@ Distribution-only and documentation-only repositories are also excluded:
 `Luotopia-Certificates`, `Luotopia-Dist`, `Luotopia-Docs`, `Luotopia-Skills`,
 and `homebrew-luotopia`.
 
-Metric version 2 replays the complete commit DAG in parent-before-child order.
+Metric version 3 adds cumulative activity alongside the existing provenance
+ledger, which replays the complete commit DAG in parent-before-child order.
 Every commit has its own file snapshot. Git's histogram diff aligns unchanged
 line occurrences, and Git's rename detection carries their provenance across
 file moves. Paths are read from NUL-delimited raw metadata, including spaces and
@@ -20,7 +21,33 @@ belong to the merger. A copy creates new occurrences rather than duplicating a
 single provenance token. Git-unrecognized moves/rewrite/copy operations count
 as new occurrences; matching does not infer semantic equivalence.
 
-The report ranks authors by source lines retained at the recorded HEAD:
+## Cumulative added / modified / removed lines
+
+Every reachable **non-merge** commit contributes once. Root text source files
+count as additions. For each contiguous zero-context histogram diff block,
+`modified = min(old lines, new lines)`, `added = new - modified`, and
+`removed = old - modified`. Separate blocks never pair across unchanged lines.
+Git-detected renames preserve alignment; a copy creates new occurrences. Moving
+into or out of the source filter counts as entering or leaving the measured
+scope. Binary blobs and non-regular files do not contribute text line counts.
+
+The report exposes `cumulative_added_lines`, `cumulative_modified_lines` and
+`cumulative_removed_lines` per author and repository in JSON/NDJSON/CSV.
+Historical contributions remain counted after later changes: if A adds a line,
+B edits it and C removes it, A has one addition, B one modification and C one
+removal. Repeated edits are repeated work events, not unique retained lines.
+
+Replacement pairing is a syntactic estimate, not semantic identity. Formatting
+and rewrites can count as modifications; Git-unrecognized moves count as
+additions/removals. Merge commits are excluded to avoid re-crediting branch
+work to integrators. Merge-only conflict resolutions are **not** included in
+cumulative activity; their final provenance is still recorded below. Independent
+edits on both merged branches count separately even if one is later discarded.
+These activity totals do not measure quality and are not summed into a score.
+
+## Current code provenance and ranking
+
+The report continues to rank authors by source lines retained at recorded HEAD:
 
 - `added_lines` / `added_ksloc`: source lines still present at HEAD.
 - `canceled_added_lines`: distinct introduced lines absent at HEAD, credited to
@@ -63,8 +90,9 @@ can start later when GitHub Actions is busy. Runs are serialized so publication
 and cleanup cannot race each other.
 
 Release titles contain the generation date and time down to seconds (UTC+8),
-human and automation contributor counts, retained source lines, historical
-introduced lines and reachable commits. These are totals across the selected
+human and automation contributor counts, cumulative `+added ~modified -removed`
+source lines and retained lines. Release bodies also list historical introduced
+lines and reachable commits. These are totals across the selected
 repositories, allowing successive reports to be compared in the release list.
 Introduced lines are historical occurrences, not gross edits; introduced minus
 retained is the number of canceled occurrences. Added/deleted cancellation

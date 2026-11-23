@@ -77,6 +77,9 @@ def scan(root, source_path, author_key, observe_author):
     references[head] += 1
     snapshots = {}
     owners = []
+    cumulative_added = Counter()
+    cumulative_modified = Counter()
+    cumulative_removed = Counter()
     binary_paths = set()
     batch = subprocess.Popen(
         ['git', 'cat-file', '--batch'], cwd=root,
@@ -104,12 +107,16 @@ def scan(root, source_path, author_key, observe_author):
             result.pop()
         return tuple(result)
 
+    @lru_cache(maxsize=128)
+    def patch_between(old_blob, blob):
+        return git(root, 'diff', '--no-ext-diff', '--no-textconv', '--no-color',
+                   '--unified=0', '--diff-algorithm=histogram',
+                   old_blob.decode(), blob.decode())
+
     def align(previous: File, blob: bytes, count: int):
         if previous.blob == blob:
             return previous.tokens
-        patch = git(root, 'diff', '--no-ext-diff', '--no-textconv', '--no-color',
-                    '--unified=0', '--diff-algorithm=histogram',
-                    previous.blob.decode(), blob.decode())
+        patch = patch_between(previous.blob, blob)
         result = [None] * count
         old_cursor = new_cursor = 0
         for match in HUNK.finditer(patch):
@@ -149,6 +156,28 @@ def scan(root, source_path, author_key, observe_author):
                     specs[delta.new_path] = delta.blob
                 else:
                     specs.pop(delta.new_path, None)
+
+            # Historical work is counted once per non-merge commit. A zero-
+            # context hunk is a contiguous replacement block: pair its old/new
+            # lines, not unrelated additions and removals elsewhere in the file.
+            # Merge-only resolutions remain in provenance, not these totals.
+            if len(parents) <= 1:
+                for delta in deltas[0]:
+                    previous = files.get(delta.old_path)
+                    blob = specs.get(delta.new_path)
+                    content = lines(blob) if blob is not None else None
+                    if previous is None:
+                        cumulative_added[author] += len(content or ())
+                    elif content is None:
+                        cumulative_removed[author] += len(previous.tokens)
+                    else:
+                        for match in HUNK.finditer(patch_between(previous.blob, blob)):
+                            old_size = int(match[2]) if match[2] is not None else 1
+                            new_size = int(match[4]) if match[4] is not None else 1
+                            paired = min(old_size, new_size)
+                            cumulative_modified[author] += paired
+                            cumulative_added[author] += new_size - paired
+                            cumulative_removed[author] += old_size - paired
 
             touched = {path for delta in deltas for item in delta for path in (item.old_path, item.new_path)}
             for state in parent_states[1:]:
@@ -233,6 +262,9 @@ def scan(root, source_path, author_key, observe_author):
             'introduced': len(owners), 'retained': len(alive), 'cancel': len(final.removed),
             'retained_by_author': retained, 'canceled_added_by_author': canceled_added,
             'canceled_deleted_by_author': canceled_deleted,
+            'cumulative_added_by_author': +cumulative_added,
+            'cumulative_modified_by_author': +cumulative_modified,
+            'cumulative_removed_by_author': +cumulative_removed,
             'excluded_binary_paths': sorted(path.decode('utf-8', 'replace') for path in binary_paths),
         }
     finally:

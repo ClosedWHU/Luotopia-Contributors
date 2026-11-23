@@ -24,6 +24,7 @@ EXCLUDED_REPOSITORIES = {
     'Luotopia-Skills', 'homebrew-luotopia',
 }
 BOT_MARKERS = ('bot', 'dependabot', 'renovate', 'claude', 'codex', 'fossabot', 'cloudflare', 'runner@', 'github-actions')
+CUMULATIVE_FIELDS = ('cumulative_added_lines', 'cumulative_modified_lines', 'cumulative_removed_lines')
 
 # These are author identities observed in the repository histories. The merge is deliberately
 # explicit: similar names alone are not enough to prove that two people are the same person.
@@ -116,6 +117,10 @@ def main() -> int:
                 row['last_commit'] = timestamp
 
         ledger = scan(root, source_path, author_key, observe_author)
+        for field, ledger_key in zip(CUMULATIVE_FIELDS, (
+                'cumulative_added_by_author', 'cumulative_modified_by_author', 'cumulative_removed_by_author')):
+            for author, count in ledger[ledger_key].items():
+                totals[author][field] = totals[author].get(field, 0) + count
         for author, count in ledger['retained_by_author'].items():
             totals[author]['add'] += count
         for author, count in ledger['canceled_added_by_author'].items():
@@ -130,6 +135,8 @@ def main() -> int:
             'add': ledger['retained'], 'delete': 0, 'cancel': ledger['cancel'],
             'excluded_binary_paths': ledger['excluded_binary_paths'],
             'conservation_verified': True,
+            **{field: sum(ledger[key].values()) for field, key in zip(CUMULATIVE_FIELDS, (
+                'cumulative_added_by_author', 'cumulative_modified_by_author', 'cumulative_removed_by_author'))},
         })
 
     merged = defaultdict(lambda: {'name': '', 'repositories': set(), 'commits': 0, 'add': 0, 'delete': 0, 'cancel': 0, 'canceled_added': 0, 'canceled_deleted': 0, 'raw_ids': set()})
@@ -145,6 +152,8 @@ def main() -> int:
         target['cancel'] += row['cancel']
         target['canceled_added'] += row['canceled_added']
         target['canceled_deleted'] += row['canceled_deleted']
+        for field in CUMULATIVE_FIELDS:
+            target[field] = target.get(field, 0) + row.get(field, 0)
         target.setdefault('first_commit', row.get('first_commit'))
         if row.get('first_commit') and (not target.get('first_commit') or timestamp_key(row['first_commit']) < timestamp_key(target['first_commit'])):
             target['first_commit'] = row['first_commit']
@@ -156,6 +165,7 @@ def main() -> int:
     for key, row in merged.items():
         net = row['add'] - row['delete']
         result.append({'id': key, 'name': row['name'], 'type': 'bot' if is_bot(row['name'], key) else 'human', 'repositories': sorted(row['repositories']), 'commits': row['commits'], 'first_commit': row.get('first_commit'), 'last_commit': row.get('last_commit'), 'added_lines': row['add'], 'deleted_lines': row['delete'], 'net_lines': net, 'added_ksloc': round(row['add'] / 1000, 3), 'deleted_ksloc': round(row['delete'] / 1000, 3), 'net_ksloc': round(net / 1000, 3), 'rank_score_ksloc': round(abs(net) / 1000, 3), 'matched_cancellations': row['cancel'], 'canceled_added_lines': row['canceled_added'], 'canceled_deleted_lines': row['canceled_deleted']})
+        result[-1].update({field: row[field] for field in CUMULATIVE_FIELDS})
         if len(row['raw_ids']) > 1:
             members = [
                 {
@@ -182,10 +192,34 @@ def main() -> int:
     identity_aliases.sort(key=lambda row: row['canonical_name'].lower())
     if unknowns:
         raise RuntimeError(f'Incomplete source checkouts: {unknowns}')
-    payload = {'metric_version': 2, 'metric': 'Git commit-DAG line provenance; rank source lines retained at HEAD', 'method': {'merge_provenance': 'first-parent matching lines, then other parents; only new lines belong to merger', 'merge_deletions': 'inherit parent removal; first parent wins independent-remover ties', 'copies': 'new line occurrences belong to the introducing commit', 'scope': 'eligible text source paths; exact Git histogram diff alignment with rename detection', 'deleted_lines': 'zero: every final removal has an observed origin; no unmatched-deletion score', 'limitations': ['Git-unrecognized moves and copies count as new occurrences', 'Repeated identical lines follow Git diff alignment; semantic equivalence is not inferred', 'Canceled lines are absent at HEAD, not necessarily invalid code']}, 'repositories': repositories, 'repo_summary': repo_summary, 'unknowns': unknowns, 'identity_aliases': identity_aliases, 'contributors': result, 'human_contributors': [row for row in result if row['type'] == 'human'], 'bot_contributors': [row for row in result if row['type'] == 'bot']}
+    payload = {
+        'metric_version': 3,
+        'metric': 'Cumulative non-merge line changes and Git commit-DAG provenance; rank source lines retained at HEAD',
+        'method': {
+            'merge_provenance': 'first-parent matching lines, then other parents; only new lines belong to merger',
+            'merge_deletions': 'inherit parent removal; first parent wins independent-remover ties',
+            'copies': 'new line occurrences belong to the introducing commit',
+            'scope': 'eligible text source paths; exact Git histogram diff alignment with rename detection',
+            'deleted_lines': 'zero: every final removal has an observed origin; no unmatched-deletion score',
+            'limitations': ['Git-unrecognized moves and copies count as new occurrences',
+                            'Repeated identical lines follow Git diff alignment; semantic equivalence is not inferred',
+                            'Canceled lines are absent at HEAD, not necessarily invalid code'],
+        },
+        'repositories': repositories, 'repo_summary': repo_summary, 'unknowns': unknowns,
+        'identity_aliases': identity_aliases, 'contributors': result,
+        'human_contributors': [row for row in result if row['type'] == 'human'],
+        'bot_contributors': [row for row in result if row['type'] == 'bot'],
+    }
+    payload['method']['cumulative_changes'] = {
+        'scope': 'all reachable non-merge commits, including root commits; merge-only resolutions excluded',
+        'pairing': 'per zero-context histogram diff block: modified=min(old,new); added=new-modified; removed=old-modified',
+        'renames': 'Git-detected renames preserve alignment; copies and source-scope entry create additions',
+        'ranking': 'unchanged: source lines retained at HEAD, not summed cumulative activity',
+        'limitations': 'Replacement pairing is a syntactic estimate, not semantic line identity; repeated edits count repeatedly',
+    }
     args.output.with_suffix('.json').write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
     with args.output.with_suffix('.csv').open('w', newline='', encoding='utf-8-sig') as handle:
-        fields = ['type', 'id', 'name', 'added_lines', 'deleted_lines', 'net_lines', 'added_ksloc', 'deleted_ksloc', 'net_ksloc', 'rank_score_ksloc', 'commits', 'matched_cancellations', 'canceled_added_lines', 'canceled_deleted_lines', 'repositories']
+        fields = ['type', 'id', 'name', *CUMULATIVE_FIELDS, 'added_lines', 'deleted_lines', 'net_lines', 'added_ksloc', 'deleted_ksloc', 'net_ksloc', 'rank_score_ksloc', 'commits', 'matched_cancellations', 'canceled_added_lines', 'canceled_deleted_lines', 'repositories']
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for row in result:

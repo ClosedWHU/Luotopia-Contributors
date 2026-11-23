@@ -26,8 +26,11 @@ def release_metadata(report, now, run_id):
     introduced = sum(row['introduced_lines'] for row in repositories)
     canceled = introduced - retained
     commits = sum(row['commits'] for row in repositories)
+    added = sum(row['cumulative_added_lines'] for row in repositories)
+    modified = sum(row['cumulative_modified_lines'] for row in repositories)
+    deleted = sum(row['cumulative_removed_lines'] for row in repositories)
     title = (f'{stamp} UTC+8 | {humans} humans + {bots} bots | '
-             f'{retained:,} retained | {introduced:,} introduced | {commits:,} commits')
+             f'+{added:,} ~{modified:,} -{deleted:,} SLOC | {retained:,} retained')
     notes = f'''## Contributor source-line report
 
 Generated **{stamp} UTC+8** from {len(repositories)} repositories.
@@ -38,11 +41,21 @@ Generated **{stamp} UTC+8** from {len(repositories)} repositories.
 | Human contributors | {humans:,} |
 | Automation identities | {bots:,} |
 | Reachable commits across repositories | {commits:,} |
+| Cumulative added lines (non-merge commits) | {added:,} |
+| Cumulative modified lines (non-merge commits) | {modified:,} |
+| Cumulative removed lines (non-merge commits) | {deleted:,} |
 | Source lines retained at recorded HEADs | {retained:,} |
 | Source lines introduced over history | {introduced:,} |
 | Introduced lines no longer retained | {canceled:,} |
 
-Metric v2 replays Git line provenance. Introduced and canceled lines are
+Metric v3 pairs old/new lines in each contiguous zero-context diff block:
+modified = min(old, new), with surplus lines counted as additions or removals.
+These cumulative activity counts include root commits and repeated edits, but
+exclude merge commits to avoid double-counting branch work. Merge-only conflict
+resolutions remain visible in provenance. Pairing is syntactic, not semantic.
+Ranking still uses retained lines, not a sum of activity counts.
+
+Git line provenance is unchanged. Introduced and canceled lines are
 historical occurrence counts, not gross edits or a code-quality score. Canceled
 additions and deletions are two attributions of the same removed lines and must
 not be added together. See the JSON report for per-repository HEADs and details.

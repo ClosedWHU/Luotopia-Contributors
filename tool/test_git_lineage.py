@@ -1,6 +1,7 @@
 """Behavior checks against isolated, real Git repositories."""
 
 import json
+import csv
 import os
 from pathlib import Path
 import subprocess
@@ -55,6 +56,9 @@ class LineageTests(unittest.TestCase):
         result = self.ledger()
         self.assertEqual(result['retained_by_author'], {'alice@example.org': 3})
         self.assertEqual(result['canceled_deleted_by_author'], {'bob@example.org': 1})
+        self.assertEqual(result['cumulative_added_by_author'], {'alice@example.org': 4})
+        self.assertEqual(result['cumulative_removed_by_author'], {'bob@example.org': 1})
+        self.assertEqual(result['cumulative_modified_by_author'], {})
 
     def test_independent_branch_deletions_cancel_once(self):
         (self.root / 'a.py').write_text('one\ntwo\n', encoding='utf-8')
@@ -72,6 +76,7 @@ class LineageTests(unittest.TestCase):
         self.assertEqual(result['cancel'], 1)
         self.assertEqual(result['retained'], 1)
         self.assertEqual(result['canceled_deleted_by_author'], {'main@example.org': 1})
+        self.assertEqual(result['cumulative_removed_by_author'], {'main@example.org': 1, 'side@example.org': 1})
 
     def test_merge_keeping_line_does_not_count_side_branch_deletion(self):
         (self.root / 'a.py').write_text('one\ntwo\n', encoding='utf-8')
@@ -102,6 +107,7 @@ class LineageTests(unittest.TestCase):
         self.assertEqual(result['retained_by_author'],
                          {'alice@example.org': 1, 'bob@example.org': 1, 'carol@example.org': 1})
         self.assertEqual(result['introduced'], 3)
+        self.assertEqual(result['cumulative_added_by_author'], {'alice@example.org': 1, 'bob@example.org': 1, 'carol@example.org': 1})
 
     def test_same_blob_from_independent_branches_has_one_final_owner(self):
         self.commit('root')
@@ -129,12 +135,22 @@ class LineageTests(unittest.TestCase):
                         '--sources', str(self.base), '--repos', str(repos),
                         '--output', str(self.base / 'report')], check=True, capture_output=True)
         report = json.loads((self.base / 'report.json').read_text(encoding='utf-8'))
-        self.assertEqual(report['metric_version'], 2)
+        self.assertEqual(report['metric_version'], 3)
+        self.assertEqual(report['contributors'][0]['cumulative_added_lines'], 2)
+        self.assertEqual(report['contributors'][1]['cumulative_removed_lines'], 1)
+        self.assertEqual(report['repo_summary'][0]['cumulative_removed_lines'], 1)
         self.assertEqual(report['repo_summary'][0]['add'], 1)
         self.assertEqual(report['repo_summary'][0]['delete'], 0)
         self.assertTrue(report['repo_summary'][0]['conservation_verified'])
         self.assertEqual(report['contributors'][0]['added_lines'], 1)
         self.assertEqual(report['contributors'][1]['canceled_deleted_lines'], 1)
+        exported = json.loads((self.base / 'report.ndjson').read_text(encoding='utf-8').splitlines()[1])
+        self.assertEqual(exported['cumulative_removed_lines'], 1)
+        with (self.base / 'report.csv').open(encoding='utf-8-sig', newline='') as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]['cumulative_added_lines'], '2')
+        self.assertEqual(rows[1]['cumulative_modified_lines'], '0')
+        self.assertEqual(rows[1]['cumulative_removed_lines'], '1')
 
     def test_copy_creates_new_occurrences_without_stealing_original(self):
         (self.root / 'a.py').write_text('one\ntwo\n', encoding='utf-8')
@@ -144,6 +160,8 @@ class LineageTests(unittest.TestCase):
         result = self.ledger()
         self.assertEqual(result['retained_by_author'], {'alice@example.org': 2, 'bob@example.org': 2})
         self.assertEqual(result['introduced'], 4)
+
+        self.assertEqual(result['cumulative_added_by_author'], {'alice@example.org': 2, 'bob@example.org': 2})
 
     def test_conflict_resolution_creates_only_actual_new_lines(self):
         (self.root / 'a.py').write_text('original\n', encoding='utf-8')
@@ -166,6 +184,62 @@ class LineageTests(unittest.TestCase):
         self.assertEqual(result['canceled_added_by_author'],
                          {'alice@example.org': 1, 'bob@example.org': 1, 'carol@example.org': 1})
         self.assertEqual(result['canceled_deleted_by_author'], {'carol@example.org': 1, 'merger@example.org': 2})
+        self.assertEqual(result['cumulative_added_by_author'], {'alice@example.org': 1})
+        self.assertEqual(result['cumulative_modified_by_author'], {'bob@example.org': 1, 'carol@example.org': 1})
+
+    def test_replacements_preserve_each_authors_historical_work(self):
+        (self.root / 'a.py').write_text('original\n', encoding='utf-8')
+        self.commit('alice')
+        (self.root / 'a.py').write_text('edited\n', encoding='utf-8')
+        self.commit('bob')
+        (self.root / 'a.py').write_text('final\n', encoding='utf-8')
+        self.commit('carol')
+        (self.root / 'a.py').unlink()
+        self.commit('dave')
+        result = self.ledger()
+        self.assertEqual(result['cumulative_added_by_author'], {'alice@example.org': 1})
+        self.assertEqual(result['cumulative_modified_by_author'], {'bob@example.org': 1, 'carol@example.org': 1})
+        self.assertEqual(result['cumulative_removed_by_author'], {'dave@example.org': 1})
+        self.assertEqual(result['retained'], 0)
+
+    def test_separate_blocks_are_not_paired_across_unchanged_lines(self):
+        (self.root / 'a.py').write_text('remove\nkeep\n', encoding='utf-8')
+        self.commit('alice')
+        (self.root / 'a.py').write_text('keep\ninsert\n', encoding='utf-8')
+        self.commit('bob')
+        result = self.ledger()
+        self.assertEqual(result['cumulative_added_by_author'], {'alice@example.org': 2, 'bob@example.org': 1})
+        self.assertEqual(result['cumulative_removed_by_author'], {'bob@example.org': 1})
+        self.assertEqual(sum(result['cumulative_modified_by_author'].values()), 0)
+
+    def test_unequal_replacement_blocks_count_only_the_surplus(self):
+        (self.root / 'a.py').write_text('old\n', encoding='utf-8')
+        self.commit('alice')
+        (self.root / 'a.py').write_text('one\ntwo\nthree\n', encoding='utf-8')
+        self.commit('bob')
+        (self.root / 'a.py').write_text('new\n', encoding='utf-8')
+        self.commit('carol')
+        result = self.ledger()
+        self.assertEqual(result['cumulative_added_by_author'], {'alice@example.org': 1, 'bob@example.org': 2})
+        self.assertEqual(result['cumulative_modified_by_author'], {'bob@example.org': 1, 'carol@example.org': 1})
+        self.assertEqual(result['cumulative_removed_by_author'], {'carol@example.org': 2})
+
+    def test_source_scope_and_binary_transitions_are_not_line_replacements(self):
+        (self.root / 'a.py').write_text('one\ntwo\n', encoding='utf-8')
+        self.commit('alice')
+        self.git('mv', 'a.py', 'a.txt')
+        self.commit('bob')
+        self.git('mv', 'a.txt', 'b.py')
+        self.commit('carol')
+        (self.root / 'b.py').write_bytes(b'\0binary')
+        self.commit('dave')
+        (self.root / 'b.py').write_text('text\n', encoding='utf-8')
+        self.commit('eve')
+        result = self.ledger()
+        self.assertEqual(result['cumulative_added_by_author'],
+                         {'alice@example.org': 2, 'carol@example.org': 2, 'eve@example.org': 1})
+        self.assertEqual(result['cumulative_removed_by_author'], {'bob@example.org': 2, 'dave@example.org': 2})
+        self.assertEqual(result['cumulative_modified_by_author'], {})
 
 
 if __name__ == '__main__':
